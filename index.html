@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ЕАИС — Дашборд мер ТТП</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #f8f9fa;
+      --card: #ffffff;
+      --text: #212529;
+      --text-light: #6c757d;
+      --border: #dee2e6;
+      --accent: #495057;
+      --primary: #0d6efd;
+    }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 1.5rem;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    h1 {
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 0.5rem;
+    }
+    .subtitle {
+      color: var(--text-light);
+      font-size: 1rem;
+    }
+    .card {
+      background: var(--card);
+      padding: 1.5rem;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+      margin-bottom: 1.5rem;
+      border: 1px solid var(--border);
+    }
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: 500;
+    }
+    input {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 1rem;
+    }
+    input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    button {
+      width: 100%;
+      padding: 0.8rem;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:hover {
+      opacity: 0.9;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .error, .info {
+      margin-top: 1rem;
+      padding: 0.75rem;
+      border-radius: 4px;
+    }
+    .error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    .info {
+      background: #d1ecf1;
+      color: #0c5460;
+      border: 1px solid #bee5eb;
+    }
+    .loading {
+      text-align: center;
+      color: var(--text-light);
+      display: none;
+      margin-top: 1rem;
+    }
+    .chart-container {
+      position: relative;
+      height: 300px;
+      margin: 1.5rem 0;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+      margin-top: 1.5rem;
+    }
+    .recommendation {
+      margin-bottom: 1.2rem;
+      padding-bottom: 1.2rem;
+      border-bottom: 1px dashed var(--border);
+    }
+    .recommendation:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>ЕАИС — Аналитический дашборд мер ТТП</h1>
+      <p class="subtitle">Введите название товара на русском или его HS-код</p>
+    </header>
+
+    <div class="card">
+      <form id="form">
+        <label for="query">Товар или HS-код</label>
+        <input type="text" id="query" placeholder="лифт, парфюм, банкомат или 842810" required />
+        <button type="submit" id="submitBtn">Анализировать</button>
+      </form>
+      <div class="loading" id="loading">Загрузка данных…</div>
+      <div id="message"></div>
+    </div>
+
+    <!-- Графики -->
+    <div id="charts" style="display:none;">
+      <div class="grid">
+        <div class="card">
+          <h3>Структура импорта по статусу стран (2024)</h3>
+          <div class="chart-container">
+            <canvas id="statusChart"></canvas>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Сравнение цен ($/т)</h3>
+          <div class="chart-container">
+            <canvas id="priceChart"></canvas>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Динамика импорта (тонн)</h3>
+          <div class="chart-container">
+            <canvas id="trendChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Рекомендации -->
+    <div class="card" id="recCard" style="display:none;">
+      <h3>Рекомендуемые меры ТТП</h3>
+      <div id="recList"></div>
+    </div>
+  </div>
+
+  <script>
+    let statusChart, priceChart, trendChart;
+
+    function destroyCharts() {
+      if (statusChart) statusChart.destroy();
+      if (priceChart) priceChart.destroy();
+      if (trendChart) trendChart.destroy();
+    }
+
+    async function fetchTrendData(product) {
+      // Запросим полные данные по товару для графика тренда
+      const response = await fetch('DataFrame_DS (2).csv');
+      const text = await response.text();
+      const lines = text.split('\n').slice(1); // пропускаем заголовок
+
+      let worldData = {2022: 0, 2023: 0, 2024: 0};
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const cols = line.split(',');
+        if (cols[8] === product && cols[1] === 'World') {
+          worldData[2022] = parseFloat(cols[2]) || 0;
+          worldData[2023] = parseFloat(cols[3]) || 0;
+          worldData[2024] = parseFloat(cols[4]) || 0;
+          break;
+        }
+      }
+      return worldData;
+    }
+
+    document.getElementById('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const query = document.getElementById('query').value.trim();
+      const submitBtn = document.getElementById('submitBtn');
+      const loadingDiv = document.getElementById('loading');
+      const messageDiv = document.getElementById('message');
+      const chartsDiv = document.getElementById('charts');
+      const recCard = document.getElementById('recCard');
+
+      messageDiv.innerHTML = '';
+      chartsDiv.style.display = 'none';
+      recCard.style.display = 'none';
+
+      if (!query) {
+        messageDiv.innerHTML = '<div class="error">Введите запрос</div>';
+        return;
+      }
+
+      submitBtn.disabled = true;
+      loadingDiv.style.display = 'block';
+
+      try {
+        const res = await fetch('/evaluate_ttp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query })
+        });
+
+        loadingDiv.style.display = 'none';
+        submitBtn.disabled = false;
+
+        let data;
+        try {
+          data = await res.json();
+        } catch (e) {
+          throw new Error('Сервер вернул недопустимый ответ');
+        }
+
+        if (!res.ok) {
+          const msg = data.detail || 'Ошибка сервера';
+          messageDiv.innerHTML = `<div class="error">${msg}</div>`;
+          return;
+        }
+
+        destroyCharts();
+
+        const m = data.metrics;
+        const productEn = data.product;
+
+        // === График 1: Статус стран ===
+        const ctx1 = document.getElementById('statusChart').getContext('2d');
+        statusChart = new Chart(ctx1, {
+          type: 'pie',
+          data: {
+            labels: ['Недружественные', 'Дружественные'],
+            datasets: [{
+              data: [m.unfriendly_share, 1 - m.unfriendly_share],
+              backgroundColor: ['#dc3545', '#28a745'],
+              borderWidth: 0
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { position: 'bottom' },
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => `${ctx.label}: ${(ctx.parsed * 100).toFixed(1)}%`
+                }
+              }
+            }
+          }
+        });
+
+        // === График 2: Цены ===
+        const ctx2 = document.getElementById('priceChart').getContext('2d');
+        priceChart = new Chart(ctx2, {
+          type: 'bar',
+          data: {
+            labels: ['Китай', 'Остальные'],
+            datasets: [{
+              label: 'Цена ($/т)',
+              data: [m.china_price_avg_usd_per_ton, m.other_price_avg_usd_per_ton],
+              backgroundColor: ['#ffc107', '#0d6efd'],
+              borderWidth: 0
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              y: { beginAtZero: true }
+            }
+          }
+        });
+
+        // === График 3: Тренд импорта ===
+        const trendData = await fetchTrendData(productEn);
+        const ctx3 = document.getElementById('trendChart').getContext('2d');
+        trendChart = new Chart(ctx3, {
+          type: 'line',
+          data: {
+            labels: ['2022', '2023', '2024'],
+            datasets: [{
+              label: 'Импорт (тонн)',
+              data: [trendData[2022], trendData[2023], trendData[2024]],
+              borderColor: '#495057',
+              backgroundColor: 'rgba(73, 80, 87, 0.1)',
+              borderWidth: 2,
+              fill: true,
+              tension: 0.3
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              y: { beginAtZero: true }
+            }
+          }
+        });
+
+        chartsDiv.style.display = 'block';
+
+        // === Рекомендации ===
+        recList.innerHTML = data.recommendations.map(r => `
+          <div class="recommendation">
+            <div><strong>Мера:</strong> ${r.measure}</div>
+            <div style="margin-top: 0.4rem;"><strong>Обоснование:</strong> ${r.reason}</div>
+          </div>
+        `).join('');
+        recCard.style.display = 'block';
+
+      } catch (err) {
+        loadingDiv.style.display = 'none';
+        submitBtn.disabled = false;
+        let msg = err.message || 'Ошибка сети';
+        if (msg.includes('fetch')) msg = 'Не удаётся подключиться к серверу. Запущен ли он на http://127.0.0.1:8000?';
+        messageDiv.innerHTML = `<div class="error">${msg}</div>`;
+      }
+    });
+  </script>
+</body>
+</html>
